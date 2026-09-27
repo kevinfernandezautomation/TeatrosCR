@@ -1,0 +1,9 @@
+import express from 'express';import cors from 'cors';import helmet from 'helmet';import {teatroNacional} from './sources/nacional.js';import {googleDiscover} from './sources/google.js';import {seed} from './seed.js';
+const app=express(),PORT=process.env.PORT||8787,ttl=(+process.env.CACHE_MINUTES||30)*60000,cache=new Map();
+const origins=(process.env.ALLOWED_ORIGINS||'http://localhost:5500,http://127.0.0.1:5500').split(',');app.use(helmet());app.use(cors({origin:(o,cb)=>!o||origins.includes(o)?cb(null,true):cb(new Error('Origin no permitido'))}));app.use(express.json({limit:'20kb'}));
+app.get('/health',(q,s)=>s.json({ok:true,time:new Date().toISOString()}));
+app.get('/api/shows',async(req,res)=>{const {date,province='',type=''}=req.query;if(!/^\d{4}-\d{2}-\d{2}$/.test(date||''))return res.status(400).json({error:'date requerido en formato YYYY-MM-DD'});const key=[date,province,type].join('|'),hit=cache.get(key);if(hit&&Date.now()-hit.at<ttl)return res.json({...hit.data,cached:true});
+ let live=[];const errors=[];for(const fn of [teatroNacional]){try{live.push(...await Promise.race([fn(),new Promise((_,rej)=>setTimeout(()=>rej(Error('timeout')),8000))]))}catch(e){errors.push(e.message)}}
+ try{live.push(...await googleDiscover(date))}catch(e){errors.push('discovery: '+e.message)}
+ let items=[...seed,...live].filter(x=>x.date===date||x.discovered).filter(x=>!province||!x.province||x.province===province).filter(x=>!type||x.type===type);items=[...new Map(items.map(x=>[(x.title+'|'+x.date+'|'+x.venue).toLowerCase(),x])).values()].map(x=>({...x,fetchedAt:new Date().toISOString()}));const data={date,items,errors,notice:'Confirme fecha, precio y disponibilidad en la fuente original antes de asistir o comprar.'};cache.set(key,{at:Date.now(),data});res.json({...data,cached:false});});
+app.listen(PORT,()=>console.log(`TeatroCR API http://localhost:${PORT}`));
